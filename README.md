@@ -57,3 +57,46 @@ To build and install the static libvsg library (.a/.lib) in source:
     cmake --build . -j 16 -t install
 
 Full details on how to build the VSG (Unix/Windows/Android/macOS) can be found in the [INSTALL.md](INSTALL.md) file.
+
+---
+
+## Building from Source (vcpkg)
+
+Tested commit: `900dbb21` on `master`.
+
+### Prerequisites
+
+* CMake 3.20+
+* Vulkan SDK 1.1+
+* vcpkg (with `VCPKG_ROOT` set or toolchain file path known)
+* C++17 compiler (GCC 9+, Clang 10+, MSVC 2019+)
+
+### Linux (Raspberry Pi 5 / x86_64)
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE=$HOME/vcpkg/scripts/buildsystems/vcpkg.cmake
+cmake --build build -j$(nproc)
+cmake --install build --prefix ~/.local
+```
+
+### Windows (VS Developer Command Prompt or CLion)
+
+```bat
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 ^
+  -DCMAKE_TOOLCHAIN_FILE=C:/Users/%USERNAME%/Projects/cppenv/vcpkg/scripts/buildsystems/vcpkg.cmake
+cmake --build build --config Release
+cmake --install build --config Release --prefix %USERPROFILE%/.local
+```
+
+### CMakePresets
+
+If a `CMakePresets.json` is present:
+
+```bash
+cmake --preset windows-release && cmake --build --preset windows-release
+```
+
+### Install location
+
+Both platforms install to `~/.local` (`%USERPROFILE%/.local` on Windows). Downstream projects find VSG via `CMAKE_PREFIX_PATH=~/.local`.

@@ -1,0 +1,87 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": { "major": 3, "minor": 20, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "base",
+            "hidden": true,
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_CXX_STANDARD": "20",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "CMAKE_INSTALL_PREFIX": "$env{HOME}/.local"
+            }
+        },
+        {
+            "name": "pi-release",
+            "inherits": "base",
+            "displayName": "Pi 5 (ARM64 Linux) Release",
+            "description": "Raspberry Pi 5 build — Release",
+            "generator": "Unix Makefiles",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_TOOLCHAIN_FILE": "$env{HOME}/vcpkg/scripts/buildsystems/vcpkg.cmake"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Linux"
+            }
+        },
+        {
+            "name": "pi-debug",
+            "inherits": "pi-release",
+            "displayName": "Pi 5 (ARM64 Linux) Debug",
+            "description": "Raspberry Pi 5 build — Debug",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "windows-release",
+            "inherits": "base",
+            "displayName": "Windows x64 Release",
+            "description": "Windows Visual Studio build — Release",
+            "generator": "Visual Studio 17 2022",
+            "architecture": {
+                "value": "x64",
+                "strategy": "set"
+            },
+            "cacheVariables": {
+                "CMAKE_PREFIX_PATH": "C:/Users/adity/.local",
+                "CMAKE_TOOLCHAIN_FILE": "C:/Users/adity/Projects/cppenv/vcpkg/scripts/buildsystems/vcpkg.cmake"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            }
+        },
+        {
+            "name": "windows-debug",
+            "inherits": "windows-release",
+            "displayName": "Windows x64 Debug",
+            "description": "Windows Visual Studio build — Debug"
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "pi-release",
+            "configurePreset": "pi-release"
+        },
+        {
+            "name": "pi-debug",
+            "configurePreset": "pi-debug"
+        },
+        {
+            "name": "windows-release",
+            "configurePreset": "windows-release",
+            "configuration": "Release"
+        },
+        {
+            "name": "windows-debug",
+            "configurePreset": "windows-debug",
+            "configuration": "Debug"
+        }
+    ]
+}
