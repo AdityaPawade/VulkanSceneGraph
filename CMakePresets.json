@@ -5,7 +5,6 @@
         {
             "name": "base",
             "hidden": true,
-            "binaryDir": "${sourceDir}/build",
             "cacheVariables": {
                 "CMAKE_CXX_STANDARD": "20",
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
@@ -17,6 +16,7 @@
             "inherits": "base",
             "displayName": "Pi 5 (ARM64 Linux) Release",
             "description": "Raspberry Pi 5 build — Release",
+            "binaryDir": "${sourceDir}/build",
             "generator": "Unix Makefiles",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
@@ -38,18 +38,23 @@
             }
         },
         {
-            "name": "windows-release",
+            "name": "windows-base",
+            "hidden": true,
             "inherits": "base",
-            "displayName": "Windows x64 Release",
-            "description": "Windows Visual Studio build — Release",
             "generator": "Visual Studio 17 2022",
             "architecture": {
                 "value": "x64",
                 "strategy": "set"
             },
             "cacheVariables": {
-                "CMAKE_PREFIX_PATH": "C:/Users/adity/.local",
-                "CMAKE_TOOLCHAIN_FILE": "C:/Users/adity/Projects/cppenv/vcpkg/scripts/buildsystems/vcpkg.cmake"
+                "CMAKE_INSTALL_PREFIX": "$env{USERPROFILE}/.local",
+                "CMAKE_PREFIX_PATH": "$env{USERPROFILE}/.local",
+                "CMAKE_TOOLCHAIN_FILE": "$env{USERPROFILE}/Projects/cppenv/vcpkg/scripts/buildsystems/vcpkg.cmake",
+                "CMAKE_CXX_FLAGS": "/D_USE_MATH_DEFINES /DNOMINMAX /D_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING /EHsc /D_WIN32_WINNT=0x0A00",
+                "CMAKE_FIND_PACKAGE_PREFER_CONFIG": "ON"
+            },
+            "environment": {
+                "VCPKG_BINARY_SOURCES": "clear;nuget,http://localhost:3000/api/packages/pkgmanager/nuget/index.json,readwrite"
             },
             "condition": {
                 "type": "equals",
@@ -58,10 +63,24 @@
             }
         },
         {
+            "name": "windows-release",
+            "inherits": "windows-base",
+            "displayName": "Windows x64 Release",
+            "description": "Windows Visual Studio build — Release",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
             "name": "windows-debug",
-            "inherits": "windows-release",
+            "inherits": "windows-base",
             "displayName": "Windows x64 Debug",
-            "description": "Windows Visual Studio build — Debug"
+            "description": "Windows Visual Studio build — Debug",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            },
+            "binaryDir": "${sourceDir}/build"
         }
     ],
     "buildPresets": [

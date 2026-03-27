@@ -85,3 +85,9 @@ include/glslang
 src/vsg/CHANGES.md
 src/vsg/vsgTargets.cmake
 
+
+# IDE
+.idea/
+
+# Build
+build/
