@@ -20,7 +20,7 @@
             "generator": "Unix Makefiles",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
-                "CMAKE_TOOLCHAIN_FILE": "$env{HOME}/vcpkg/scripts/buildsystems/vcpkg.cmake"
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
             },
             "condition": {
                 "type": "equals",
@@ -49,12 +49,12 @@
             "cacheVariables": {
                 "CMAKE_INSTALL_PREFIX": "$env{USERPROFILE}/.local",
                 "CMAKE_PREFIX_PATH": "$env{USERPROFILE}/.local",
-                "CMAKE_TOOLCHAIN_FILE": "$env{USERPROFILE}/Projects/cppenv/vcpkg/scripts/buildsystems/vcpkg.cmake",
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
                 "CMAKE_CXX_FLAGS": "/D_USE_MATH_DEFINES /DNOMINMAX /D_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING /EHsc /D_WIN32_WINNT=0x0A00",
                 "CMAKE_FIND_PACKAGE_PREFER_CONFIG": "ON"
             },
             "environment": {
-                "VCPKG_BINARY_SOURCES": "clear;nuget,http://localhost:3000/api/packages/pkgmanager/nuget/index.json,readwrite"
+                "VCPKG_BINARY_SOURCES": "clear;nuget,http://$env{PKG_CACHE_HOST}/api/packages/pkgmanager/nuget/index.json,readwrite"
             },
             "condition": {
                 "type": "equals",
