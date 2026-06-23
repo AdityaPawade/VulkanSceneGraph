@@ -1,0 +1,10 @@
+{
+  "name": "vulkanscenegraph",
+  "version": "1.1.14",
+  "description": "VulkanSceneGraph (VSG) - low-level Vulkan scene graph library (Cubone fork)",
+  "builtin-baseline": "f3e10653cc27d62a37a3763cd84b38bca07c6075",
+  "dependencies": [
+    "glslang",
+    "spirv-tools"
+  ]
+}

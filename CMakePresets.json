@@ -51,9 +51,11 @@
                 "CMAKE_PREFIX_PATH": "$env{USERPROFILE}/.local",
                 "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
                 "CMAKE_CXX_FLAGS": "/D_USE_MATH_DEFINES /DNOMINMAX /D_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING /EHsc /D_WIN32_WINNT=0x0A00",
-                "CMAKE_FIND_PACKAGE_PREFER_CONFIG": "ON"
+                "CMAKE_FIND_PACKAGE_PREFER_CONFIG": "ON",
+                "VSG_SUPPORTS_Windowing": "ON"
             },
             "environment": {
+                "VCPKG_ROOT": "$env{VCPKG_GLOBAL_ROOT}",
                 "VCPKG_BINARY_SOURCES": "clear;nuget,http://$env{PKG_CACHE_HOST}/api/packages/pkgmanager/nuget/index.json,readwrite"
             },
             "condition": {
