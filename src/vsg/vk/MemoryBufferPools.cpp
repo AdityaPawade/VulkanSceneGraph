@@ -15,6 +15,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 #include <algorithm>
 #include <chrono>
+#include <vector>
 
 using namespace vsg;
 
@@ -65,6 +66,141 @@ MemoryBufferPools::PoolStats MemoryBufferPools::deviceMemoryStats() const
         else s.bytesInBusyBlocks += used;
     }
     return s;
+}
+
+// See the header for the measurement that motivated this and for why the frame
+// delay is not optional.
+//
+// The two pools are walked with one shared helper because the rule is identical
+// for both: a block that reports nothing reserved, and has reported that for
+// long enough that no submitted work can still be reading it, is dropped.
+//
+// Dropping means erasing the pool's ref_ptr. That does not necessarily destroy
+// anything: if a BufferInfo somewhere still names the block it stays alive and
+// simply stops being handed out. It is destroyed when the last reference goes,
+// which is what makes this safe to do from the pool without knowing who else
+// holds one.
+MemoryBufferPools::TrimResult MemoryBufferPools::trimEmptyBlocks(uint64_t frame, uint64_t minAgeFrames, std::size_t keepFreeBlocks)
+{
+    std::scoped_lock<std::mutex> lock(_mutex);
+
+    TrimResult result;
+
+    // Age a block, and say whether it has now been empty long enough to go.
+    // Every block is aged on every call, including ones the cushion will
+    // protect -- otherwise a pool sitting just above the cushion would have
+    // the clock reset on it forever and would never trim at all.
+    const auto age = [&](const Object* block, bool isEmpty) {
+        if (!isEmpty)
+        {
+            _emptySince.erase(block);
+            return false;
+        }
+        auto [itr, inserted] = _emptySince.try_emplace(block, frame);
+        // A frame number that went backwards (a restart, a reset counter)
+        // would underflow the unsigned subtraction and make every block look
+        // ancient, releasing the lot at once. Treat it as freshly empty.
+        if (frame < itr->second)
+        {
+            itr->second = frame;
+            return false;
+        }
+        return !inserted && (frame - itr->second) >= minAgeFrames;
+    };
+
+    // Both pools follow the same rule, so they share one walk. keyOf says which
+    // blocks can substitute for one another and blockBytes how big one is;
+    // those are the only things that differ between the two.
+    //
+    // WHY THE CUSHION IS PER CLASS AND NOT GLOBAL. A block can only satisfy a
+    // request it is compatible with: reserveMemory matches on memoryTypeBits
+    // AND alignment, reserveBuffer on usage AND sharing mode. A single global
+    // cushion of four is therefore worthless to a workload that cycles through
+    // five classes -- once all five are empty the count is five, one over the
+    // cushion, so one is freed every cycle and reallocated the moment that
+    // class is touched again. The pool would round-trip through
+    // vkAllocateMemory forever while holding four blocks that cannot serve the
+    // request being made. Counting per class means each class keeps its own
+    // spare and a rotating working set is never evicted.
+    const auto trimPool = [&](auto& pool, auto&& keyOf, auto&& blockBytes) {
+        struct Bucket
+        {
+            std::size_t empty = 0;
+            std::vector<std::pair<uint64_t, std::size_t>> releasable; // (emptySince, index)
+        };
+        std::map<std::pair<uint64_t, uint64_t>, Bucket> buckets;
+
+        for (std::size_t i = 0; i < pool.size(); ++i)
+        {
+            const Object* block = pool[i].get();
+            const bool isEmpty = pool[i]->totalReservedSize() == 0;
+
+            // Age every block, empty or not, and before the continue below:
+            // this is what clears the clock on a block that got used again.
+            const bool aged = age(block, isEmpty);
+            if (!isEmpty) continue;
+
+            auto& bucket = buckets[keyOf(pool[i])];
+            ++bucket.empty;
+            if (aged) bucket.releasable.emplace_back(_emptySince[block], i);
+        }
+
+        std::vector<bool> drop(pool.size(), false);
+        bool anyDropped = false;
+
+        for (auto& entry : buckets)
+        {
+            Bucket& bucket = entry.second;
+            if (bucket.empty <= keepFreeBlocks || bucket.releasable.empty()) continue;
+
+            std::size_t budget = bucket.empty - keepFreeBlocks;
+            if (budget > bucket.releasable.size()) budget = bucket.releasable.size();
+
+            // Longest-empty first. Keeping the most recently emptied is
+            // deliberate: those are the ones the camera's current position was
+            // just cycling, so they are the ones about to be asked for again.
+            std::sort(bucket.releasable.begin(), bucket.releasable.end());
+            bucket.releasable.resize(budget);
+
+            for (const auto& candidate : bucket.releasable)
+            {
+                const std::size_t i = candidate.second;
+                drop[i] = true;
+                anyDropped = true;
+                result.bytesReleased += blockBytes(pool[i]);
+                ++result.blocksReleased;
+                _emptySince.erase(pool[i].get());
+            }
+        }
+
+        if (!anyDropped) return;
+
+        std::size_t write = 0;
+        for (std::size_t i = 0; i < pool.size(); ++i)
+        {
+            if (!drop[i]) pool[write++] = std::move(pool[i]);
+        }
+        pool.resize(write);
+    };
+
+    // A block reaching here holds nothing, so everything in it is free space;
+    // that free total IS the block size.
+    trimPool(
+        memoryPools,
+        [](const ref_ptr<DeviceMemory>& b) {
+            const VkMemoryRequirements& r = b->getMemoryRequirements();
+            return std::pair<uint64_t, uint64_t>(r.memoryTypeBits, r.alignment);
+        },
+        [](const ref_ptr<DeviceMemory>& b) { return b->totalAvailableSize(); });
+
+    trimPool(
+        bufferPools,
+        [](const ref_ptr<Buffer>& b) {
+            return std::pair<uint64_t, uint64_t>(b->usage, b->sharingMode);
+        },
+        [](const ref_ptr<Buffer>& b) { return b->size; });
+
+    return result;
 }
 
 MemoryBufferPools::PoolStats MemoryBufferPools::bufferStats() const

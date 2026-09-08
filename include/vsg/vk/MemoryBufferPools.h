@@ -13,6 +13,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 </editor-fold> */
 
 #include <deque>
+#include <map>
 #include <memory>
 
 #include <vsg/core/Object.h>
@@ -102,6 +103,60 @@ namespace vsg
         /// Stats for the Buffer blocks.
         PoolStats bufferStats() const;
 
+        /// What a trim gave back.
+        struct TrimResult
+        {
+            std::size_t blocksReleased = 0;
+            VkDeviceSize bytesReleased = 0;
+        };
+
+        /// Hand blocks that hold nothing back to the driver.
+        ///
+        /// WHY THIS EXISTS. Until now `push_back` was the only operation ever
+        /// performed on either pool vector: a block, once created, was kept for
+        /// the life of the device. Measured in VulkanGIS after ten zoom legs and
+        /// eight pans over one city: 269 blocks, 6037 MB committed, 681 MB
+        /// actually in use, and 207 of those blocks holding NOTHING AT ALL. The
+        /// 4.6 GB in them still counted against the GPU budget, so the driver
+        /// refused 392 subsequent allocations and the scene stopped loading
+        /// content entirely. Restarting the process fixed it, which is the
+        /// signature of a pool that only grows.
+        ///
+        /// WHY THE FRAME DELAY, and do not remove it. Dropping the pool's
+        /// reference is NOT sufficient on its own. Reference counting only
+        /// proves no C++ object still points at the block; a command buffer
+        /// already submitted can still be reading a VkBuffer bound to that
+        /// VkDeviceMemory after the last BufferInfo naming it has gone. So a
+        /// block is only released once it has been continuously empty for
+        /// `minAgeFrames` frames, which must exceed the number of frames the
+        /// application keeps in flight.
+        ///
+        /// Safe to call once per frame. Must be called on a thread that is not
+        /// concurrently recording, and `frame` must increase monotonically.
+        ///
+        /// \param frame          the current frame number
+        /// \param minAgeFrames   how long a block must have been empty
+        /// \return what was released
+        ///
+        /// WHY THE CUSHION. Releasing a block the instant it empties turns the
+        /// pool into a thrash loop: the block goes back to the driver and
+        /// vkAllocateMemory is called for the same 16 MB a few frames later.
+        /// keepFreeBlocks retains that many empty blocks as spare capacity, so
+        /// ordinary churn is absorbed inside the pool and only a sustained
+        /// surplus is handed back.
+        ///
+        /// The cushion is PER REUSE-COMPATIBLE CLASS, not per pool. A block can
+        /// only satisfy a request it matches -- reserveMemory on memoryTypeBits
+        /// and alignment, reserveBuffer on usage and sharing mode -- so a global
+        /// count would keep four blocks that cannot serve the request being made
+        /// while freeing and reallocating the one class actually in use.
+        ///
+        /// \param frame          the current frame number
+        /// \param minAgeFrames   how long a block must have been empty
+        /// \param keepFreeBlocks empty blocks to retain per compatibility class
+        /// \return what was released
+        TrimResult trimEmptyBlocks(uint64_t frame, uint64_t minAgeFrames = 3, std::size_t keepFreeBlocks = 0);
+
     protected:
         mutable std::mutex _mutex;
 
@@ -111,6 +166,11 @@ namespace vsg
 
         using BufferPools = std::vector<ref_ptr<Buffer>>;
         BufferPools bufferPools;
+
+        /// Frame on which a block was FIRST seen empty, keyed by block.
+        /// Cleared for any block that is used again, so the age only counts
+        /// uninterrupted emptiness. See trimEmptyBlocks().
+        std::map<const Object*, uint64_t> _emptySince;
     };
     VSG_type_name(vsg::MemoryBufferPools);
 
