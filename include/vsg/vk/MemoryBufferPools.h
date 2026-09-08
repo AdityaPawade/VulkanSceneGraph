@@ -77,6 +77,23 @@ namespace vsg
             VkDeviceSize totalSize = 0;      ///< bytes committed to the driver
             VkDeviceSize totalAvailable = 0; ///< free bytes inside those blocks
             VkDeviceSize largestContiguous = 0; ///< biggest single run that is free
+
+            /// How many blocks hold NOTHING at all.
+            ///
+            /// The number that decides whether returning empty blocks to the
+            /// driver is worth anything. 544 MB live across 261 blocks is
+            /// either ~24 blocks packed full and ~237 returnable, or 2 MB
+            /// pinned in every one of them and NOTHING returnable. The
+            /// aggregate cannot tell those apart; this can.
+            std::size_t emptyBlocks = 0;
+
+            /// Blocks holding less than an eighth of their capacity. A block
+            /// that is nearly empty is one relocation away from returnable,
+            /// which is what decides whether defragmentation would pay.
+            std::size_t nearlyEmptyBlocks = 0;
+
+            /// Bytes held in blocks that are neither empty nor nearly empty.
+            VkDeviceSize bytesInBusyBlocks = 0;
         };
 
         /// Stats for the DeviceMemory blocks (the device-local pool).

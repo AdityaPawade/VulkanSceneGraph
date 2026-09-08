@@ -53,10 +53,16 @@ MemoryBufferPools::PoolStats MemoryBufferPools::deviceMemoryStats() const
     s.blocks = memoryPools.size();
     for (auto& deviceMemory : memoryPools)
     {
-        s.totalSize += deviceMemory->totalReservedSize() + deviceMemory->totalAvailableSize();
-        s.totalAvailable += deviceMemory->totalAvailableSize();
+        const VkDeviceSize used = deviceMemory->totalReservedSize();
+        const VkDeviceSize avail = deviceMemory->totalAvailableSize();
+        s.totalSize += used + avail;
+        s.totalAvailable += avail;
         s.largestContiguous = std::max(s.largestContiguous,
             static_cast<VkDeviceSize>(deviceMemory->maximumAvailableSpace()));
+
+        if (used == 0) ++s.emptyBlocks;
+        else if (used * 8 < used + avail) ++s.nearlyEmptyBlocks;
+        else s.bytesInBusyBlocks += used;
     }
     return s;
 }
@@ -69,10 +75,15 @@ MemoryBufferPools::PoolStats MemoryBufferPools::bufferStats() const
     s.blocks = bufferPools.size();
     for (auto& buffer : bufferPools)
     {
+        const VkDeviceSize used = buffer->totalReservedSize();
         s.totalSize += buffer->size;
         s.totalAvailable += buffer->totalAvailableSize();
         s.largestContiguous = std::max(s.largestContiguous,
             static_cast<VkDeviceSize>(buffer->maximumAvailableSpace()));
+
+        if (used == 0) ++s.emptyBlocks;
+        else if (used * 8 < buffer->size) ++s.nearlyEmptyBlocks;
+        else s.bytesInBusyBlocks += used;
     }
     return s;
 }
