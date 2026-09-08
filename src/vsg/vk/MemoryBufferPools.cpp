@@ -38,6 +38,45 @@ VkDeviceSize MemoryBufferPools::computeMemoryTotalAvailable() const
     return totalAvailableSize;
 }
 
+// See the header for why these exist (VulkanGIS VGIS-509). One walk under the
+// pool's own mutex, so a caller cannot see a half-updated set of blocks.
+//
+// largestContiguous is the MAXIMUM over blocks, not a sum: an allocation has to
+// fit inside ONE block, so the biggest single free run is what decides whether
+// the next reserve() succeeds. Summing the per-block figures would produce a
+// number that looks healthy at exactly the moment allocations start failing.
+MemoryBufferPools::PoolStats MemoryBufferPools::deviceMemoryStats() const
+{
+    std::scoped_lock<std::mutex> lock(_mutex);
+
+    PoolStats s;
+    s.blocks = memoryPools.size();
+    for (auto& deviceMemory : memoryPools)
+    {
+        s.totalSize += deviceMemory->totalReservedSize() + deviceMemory->totalAvailableSize();
+        s.totalAvailable += deviceMemory->totalAvailableSize();
+        s.largestContiguous = std::max(s.largestContiguous,
+            static_cast<VkDeviceSize>(deviceMemory->maximumAvailableSpace()));
+    }
+    return s;
+}
+
+MemoryBufferPools::PoolStats MemoryBufferPools::bufferStats() const
+{
+    std::scoped_lock<std::mutex> lock(_mutex);
+
+    PoolStats s;
+    s.blocks = bufferPools.size();
+    for (auto& buffer : bufferPools)
+    {
+        s.totalSize += buffer->size;
+        s.totalAvailable += buffer->totalAvailableSize();
+        s.largestContiguous = std::max(s.largestContiguous,
+            static_cast<VkDeviceSize>(buffer->maximumAvailableSpace()));
+    }
+    return s;
+}
+
 VkDeviceSize MemoryBufferPools::computeMemoryTotalReserved() const
 {
     std::scoped_lock<std::mutex> lock(_mutex);

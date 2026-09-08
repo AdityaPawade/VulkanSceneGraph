@@ -59,6 +59,32 @@ namespace vsg
 
         void report(LogOutput& out) const;
 
+        /// What this pool has committed, what is free inside it, and how
+        /// fragmented that free space is.
+        ///
+        /// Added for VulkanGIS VGIS-509. The pool never returns an emptied
+        /// block to the driver, so "committed" tracks everywhere the camera has
+        /// BEEN rather than what is resident -- reporting a single number made
+        /// half of 7.8 GB look real when it was empty space inside held blocks.
+        /// And `largestContiguous` is the number that explains an allocation
+        /// being refused while plenty is nominally free; nothing exposed it.
+        ///
+        /// Aggregated here rather than by exposing the block vectors, so the
+        /// walk happens under the pool's own mutex.
+        struct PoolStats
+        {
+            std::size_t blocks = 0;          ///< committed blocks
+            VkDeviceSize totalSize = 0;      ///< bytes committed to the driver
+            VkDeviceSize totalAvailable = 0; ///< free bytes inside those blocks
+            VkDeviceSize largestContiguous = 0; ///< biggest single run that is free
+        };
+
+        /// Stats for the DeviceMemory blocks (the device-local pool).
+        PoolStats deviceMemoryStats() const;
+
+        /// Stats for the Buffer blocks.
+        PoolStats bufferStats() const;
+
     protected:
         mutable std::mutex _mutex;
 
