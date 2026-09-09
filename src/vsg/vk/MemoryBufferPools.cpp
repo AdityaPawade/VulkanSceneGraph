@@ -193,14 +193,90 @@ MemoryBufferPools::TrimResult MemoryBufferPools::trimEmptyBlocks(uint64_t frame,
         },
         [](const ref_ptr<DeviceMemory>& b) { return b->totalAvailableSize(); });
 
+    // USAGE ONLY, deliberately, and it must stay matched to reserveBuffer.
+    //
+    // reserveBuffer above tests `bufferFromPool->usage == bufferUsageFlags` and
+    // never compares sharingMode -- it takes the parameter and ignores it. So
+    // two empty buffers differing only in sharing mode are interchangeable to
+    // the allocator. Bucketing them apart here would split one reuse class into
+    // two and let the cushion pin 2 x keepFreeBlocks where the allocator only
+    // ever needed one class's worth, which is precisely the wrong thing to do
+    // while the device is refusing allocations.
+    //
+    // If reserveBuffer ever starts matching on sharingMode, this key must gain
+    // it in the same commit. The rule is that the trim keeps spares that can
+    // actually serve the next request, and only reserveBuffer defines "can".
     trimPool(
         bufferPools,
         [](const ref_ptr<Buffer>& b) {
-            return std::pair<uint64_t, uint64_t>(b->usage, b->sharingMode);
+            return std::pair<uint64_t, uint64_t>(b->usage, 0);
         },
         [](const ref_ptr<Buffer>& b) { return b->size; });
 
     return result;
+}
+
+// See the header for what these answer. The key pair is exactly what the
+// matching reserve() compares on, so two blocks share a class here if and only
+// if one could have satisfied a request the other did.
+namespace
+{
+    template<typename POOL, typename KEYOF, typename SIZEOF>
+    std::vector<MemoryBufferPools::ClassStats> classify(const POOL& pool, KEYOF keyOf, SIZEOF sizeOf)
+    {
+        std::map<std::pair<uint64_t, uint64_t>, MemoryBufferPools::ClassStats> byClass;
+
+        for (const auto& block : pool)
+        {
+            const auto key = keyOf(block);
+            auto& c = byClass[key];
+            c.keyA = key.first;
+            c.keyB = key.second;
+            ++c.blocks;
+
+            const VkDeviceSize size = sizeOf(block);
+            c.totalSize += size;
+            if (block->totalReservedSize() == 0)
+            {
+                ++c.emptyBlocks;
+                c.emptyBytes += size;
+            }
+        }
+
+        std::vector<MemoryBufferPools::ClassStats> result;
+        result.reserve(byClass.size());
+        for (const auto& entry : byClass) result.push_back(entry.second);
+        return result;
+    }
+} // namespace
+
+std::vector<MemoryBufferPools::ClassStats> MemoryBufferPools::deviceMemoryClasses() const
+{
+    std::scoped_lock<std::mutex> lock(_mutex);
+
+    return classify(memoryPools,
+        [](const ref_ptr<DeviceMemory>& b) {
+            const VkMemoryRequirements& r = b->getMemoryRequirements();
+            return std::pair<uint64_t, uint64_t>(r.memoryTypeBits, r.alignment);
+        },
+        [](const ref_ptr<DeviceMemory>& b) {
+            return b->totalReservedSize() + b->totalAvailableSize();
+        });
+}
+
+std::vector<MemoryBufferPools::ClassStats> MemoryBufferPools::bufferClasses() const
+{
+    std::scoped_lock<std::mutex> lock(_mutex);
+
+    // Keyed exactly as trimEmptyBlocks keys it, and for the same reason:
+    // reserveBuffer matches on usage alone. A report that classified buffers
+    // differently from the policy would be describing a pool that does not
+    // exist.
+    return classify(bufferPools,
+        [](const ref_ptr<Buffer>& b) {
+            return std::pair<uint64_t, uint64_t>(b->usage, 0);
+        },
+        [](const ref_ptr<Buffer>& b) { return b->size; });
 }
 
 MemoryBufferPools::PoolStats MemoryBufferPools::bufferStats() const

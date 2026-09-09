@@ -15,6 +15,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #include <deque>
 #include <map>
 #include <memory>
+#include <vector>
 
 #include <vsg/core/Object.h>
 #include <vsg/state/BufferInfo.h>
@@ -96,6 +97,43 @@ namespace vsg
             /// Bytes held in blocks that are neither empty nor nearly empty.
             VkDeviceSize bytesInBusyBlocks = 0;
         };
+
+        /// One reuse-compatible class of blocks.
+        ///
+        /// WHY PER CLASS. trimEmptyBlocks() applies its cushion per class, not
+        /// per pool, because a block can only satisfy a request it matches. The
+        /// floor that creates is therefore `keepFreeBlocks x classes`, and a
+        /// total cannot show that: it reports "72 empty blocks" whether that is
+        /// one class badly behaved or eighteen classes each holding their four.
+        ///
+        /// Measured in VulkanGIS the moment tiles stopped appearing: 1.56 GB
+        /// standing in 72 empty blocks, 27% of everything committed, on a GPU
+        /// already at 85.1% of its cap. 72 is exactly 18 x 4. Whether that was
+        /// the cushion or merely blocks not yet aged out is the question this
+        /// exists to answer, and nothing reported it.
+        struct ClassStats
+        {
+            /// memoryTypeBits for the device pool, usage flags for the buffer
+            /// pool. Reported raw so a reader can tell classes apart without
+            /// this header having to name every Vulkan flag.
+            uint64_t keyA = 0;
+            /// alignment for the device pool, sharing mode for the buffer pool.
+            uint64_t keyB = 0;
+
+            std::size_t blocks = 0;
+            std::size_t emptyBlocks = 0;
+            VkDeviceSize totalSize = 0;
+            /// Bytes sitting in the empty blocks of this class.
+            VkDeviceSize emptyBytes = 0;
+        };
+
+        /// Per-class breakdown of the DeviceMemory pool, keyed by the pair
+        /// reserveMemory() matches on: (memoryTypeBits, alignment).
+        std::vector<ClassStats> deviceMemoryClasses() const;
+
+        /// Per-class breakdown of the Buffer pool, keyed by the pair
+        /// reserveBuffer() matches on: (usage, sharingMode).
+        std::vector<ClassStats> bufferClasses() const;
 
         /// Stats for the DeviceMemory blocks (the device-local pool).
         PoolStats deviceMemoryStats() const;
