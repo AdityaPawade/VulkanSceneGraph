@@ -795,7 +795,7 @@ void ViewDependentState::traverse(RecordTraversal& rt) const
             ortho->right = ls_bounds.max.x;
             ortho->bottom = ls_bounds.min.y;
             ortho->top = ls_bounds.max.y;
-            ortho->nearDistance = -ls_bounds.max.z;
+            ortho->nearDistance = -ls_bounds.max.z - shadowCasterExtension;   // local patch, see the header
             ortho->farDistance = -ls_bounds.min.z;
 
             dmat4 shadowMapProjView = camera->projectionMatrix->transform() * camera->viewMatrix->transform();

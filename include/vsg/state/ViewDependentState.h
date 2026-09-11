@@ -154,6 +154,13 @@ namespace vsg
         double maxShadowDistance = 1e8;
         double shadowMapBias = 0.005;
         double lambda = 0.5;
+        // Local patch: how far beyond the view frustum slice, towards the
+        // light, a cascade's near plane reaches. Each cascade is fitted to
+        // the slice of the view frustum it covers, so anything between that
+        // slice and the light -- a ridge east of a valley at a low sun, a
+        // tower just outside the picture -- is clipped by the orthographic
+        // near plane and casts nothing. 0 keeps that behaviour.
+        double shadowCasterExtension = 0.0;
 
         // map of Light's that we wish to override their ShadowSettings,
         // assigning shadowSettingsOverride[{}] = shadowSettings will override all Light not otherwise explicitly matched.
