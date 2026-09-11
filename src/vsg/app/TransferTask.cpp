@@ -434,6 +434,10 @@ TransferTask::TransferResult TransferTask::_transferData(DataToCopy& dataToCopy)
 
     if (frame.waitOnFence && fence)
     {
+        // Local patch: named so a profiler can tell a fence wait from a
+        // staging allocation or the submit; all three sat unnamed inside
+        // transferData and one of them held 50-200 ms frames.
+        CPU_INSTRUMENTATION_L1_NC(instrumentation, "transferData fence wait", COLOR_RECORD);
         uint64_t timeout = std::numeric_limits<uint64_t>::max();
         if (VkResult result = fence->wait(timeout); result != VK_SUCCESS) return TransferResult{result, {}};
         fence->resetFenceAndDependencies();
@@ -467,13 +471,22 @@ TransferTask::TransferResult TransferTask::_transferData(DataToCopy& dataToCopy)
     // allocate staging buffer if required
     if (!staging || staging->size < totalSize)
     {
+        CPU_INSTRUMENTATION_L1_NC(instrumentation, "transferData staging alloc", COLOR_RECORD);
+        VkDeviceSize previousSize = staging ? staging->size : 0;
+
+        // Local patch: grow geometrically, never exactly to fit. Sized to the
+        // frame's transfer, a set that grows by a few bytes a second (a track
+        // line) re-created this buffer on every growth, and each host-visible
+        // allocation cost 15-275 ms on the render thread (measured 2026-09-12:
+        // 41 re-creations in a 140 s run, 781 ms of 790 ms of slow-frame
+        // time). Half again over the request, and at least double the last
+        // size, keeps the count logarithmic.
+        totalSize = std::max(totalSize + totalSize / 2, previousSize * 2);
         if (totalSize < minimumStagingBufferSize)
         {
             totalSize = minimumStagingBufferSize;
             log(level, "    Clamping totalSize to ", minimumStagingBufferSize);
         }
-
-        VkDeviceSize previousSize = staging ? staging->size : 0;
 
         VkMemoryPropertyFlags stagingMemoryPropertiesFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
         staging = vsg::createBufferAndMemory(device, totalSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_SHARING_MODE_EXCLUSIVE, stagingMemoryPropertiesFlags);
@@ -543,7 +556,10 @@ TransferTask::TransferResult TransferTask::_transferData(DataToCopy& dataToCopy)
         log(level, "   TransferTask submitInfo.waitSemaphoreCount = ", submitInfo.waitSemaphoreCount);
         log(level, "   TransferTask submitInfo.signalSemaphoreCount = ", submitInfo.signalSemaphoreCount);
 
-        result = transferQueue->submit(submitInfo, fence);
+        {
+            CPU_INSTRUMENTATION_L1_NC(instrumentation, "transferData submit", COLOR_RECORD);
+            result = transferQueue->submit(submitInfo, fence);
+        }
 
         frame.waitOnFence = true;
 
