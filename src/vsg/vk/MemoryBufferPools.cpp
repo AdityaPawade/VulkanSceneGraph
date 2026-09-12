@@ -94,6 +94,9 @@ MemoryBufferPools::TrimResult MemoryBufferPools::trimEmptyBlocks(uint64_t frame,
     {
         if (!lock.try_lock())
         {
+            // Record it BEFORE returning: the next successful call has to know
+            // its view of emptiness has a hole in it. See the header.
+            _lastSkippedFrame.store(frame, std::memory_order_relaxed);
             result.skipped = true;
             return result;
         }
@@ -107,6 +110,11 @@ MemoryBufferPools::TrimResult MemoryBufferPools::trimEmptyBlocks(uint64_t frame,
     // Every block is aged on every call, including ones the cushion will
     // protect -- otherwise a pool sitting just above the cushion would have
     // the clock reset on it forever and would never trim at all.
+    // A skip observed nothing, so treat the whole span as unobserved and let
+    // no block claim continuous emptiness across it.
+    const uint64_t lastSkip = _lastSkippedFrame.load(std::memory_order_relaxed);
+    const bool recentlyBlind = lastSkip != 0 && frame >= lastSkip && (frame - lastSkip) < minAgeFrames;
+
     const auto age = [&](const Object* block, bool isEmpty) {
         if (!isEmpty)
         {
@@ -122,6 +130,7 @@ MemoryBufferPools::TrimResult MemoryBufferPools::trimEmptyBlocks(uint64_t frame,
             itr->second = frame;
             return false;
         }
+        if (recentlyBlind) return false;
         return !inserted && (frame - itr->second) >= minAgeFrames;
     };
 

@@ -12,6 +12,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 </editor-fold> */
 
+#include <atomic>
 #include <deque>
 #include <map>
 #include <memory>
@@ -231,6 +232,18 @@ namespace vsg
 
     protected:
         mutable std::mutex _mutex;
+
+        /// The frame on which a nonBlocking trim last stepped aside, or 0.
+        ///
+        /// The age below is an invariant about UNINTERRUPTED OBSERVATION -- a
+        /// block's entry is erased the moment it is seen non-empty -- so a
+        /// call that observes nothing can hide a reserve and release inside
+        /// it. A skip is not a random gap either: it happens precisely when a
+        /// compile thread holds this mutex to allocate. So a skip restarts the
+        /// clock for every block, and nothing is released until minAgeFrames
+        /// have passed since one. Atomic because it is written on the path
+        /// where the lock was NOT taken.
+        std::atomic<uint64_t> _lastSkippedFrame{0};
 
         // transfer data settings
         using MemoryPools = std::vector<ref_ptr<DeviceMemory>>;
