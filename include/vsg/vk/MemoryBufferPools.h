@@ -125,6 +125,17 @@ namespace vsg
             VkDeviceSize totalSize = 0;
             /// Bytes sitting in the empty blocks of this class.
             VkDeviceSize emptyBytes = 0;
+            /// Bytes actually reserved by live allocations in this class.
+            ///
+            /// totalSize - reservedBytes - emptyBytes is the number VGIS-545
+            /// needs and nothing reported: free space STRANDED INSIDE BUSY
+            /// BLOCKS, which the empty-block trim cannot reach by definition
+            /// and which is what grows when a pool churns payloads of
+            /// changing sizes. Measured 2026-09-12: committed memory rose
+            /// 32-48 MB per heavy pass with the scene constant and every
+            /// block non-empty, so the trim had nothing to return and the
+            /// aggregate could not say where the bytes went.
+            VkDeviceSize reservedBytes = 0;
         };
 
         /// Per-class breakdown of the DeviceMemory pool, keyed by the pair
@@ -146,6 +157,10 @@ namespace vsg
         {
             std::size_t blocksReleased = 0;
             VkDeviceSize bytesReleased = 0;
+            /// True when nonBlocking was asked for and somebody else held the
+            /// lock, so nothing was examined. Not an error: a block that is
+            /// empty this frame is still empty on the next call.
+            bool skipped = false;
         };
 
         /// Hand blocks that hold nothing back to the driver.
@@ -189,11 +204,30 @@ namespace vsg
         /// count would keep four blocks that cannot serve the request being made
         /// while freeing and reallocating the one class actually in use.
         ///
+        /// WHY nonBlocking EXISTS, and why the default is the safe one.
+        /// This function takes _mutex, and _mutex is the ALLOCATION lock:
+        /// reserveMemory holds it across DeviceMemory::create, which is
+        /// vkAllocateMemory, and reserveBuffer holds it across
+        /// Buffer::compile. Both run on compile threads and both can sit in
+        /// the driver for tens of milliseconds when video memory is under
+        /// pressure. A caller on the RENDER thread that blocks here therefore
+        /// pays a compile thread's driver time out of its own frame.
+        ///
+        /// rocky calls this once per frame from VSGContextImpl::update(), so
+        /// it passes true. Skipping is free: a block that is empty now is
+        /// still empty next frame, the age clock is the viewer's rendered
+        /// frame count rather than a count of calls, and the cushion means
+        /// nothing is urgent. This mirrors the try_lock already used for the
+        /// garbage collector a few lines earlier in that same function, which
+        /// took frames over 50 ms in a heavy zoom run from 70 to none.
+        ///
         /// \param frame          the current frame number
         /// \param minAgeFrames   how long a block must have been empty
         /// \param keepFreeBlocks empty blocks to retain per compatibility class
-        /// \return what was released
-        TrimResult trimEmptyBlocks(uint64_t frame, uint64_t minAgeFrames = 3, std::size_t keepFreeBlocks = 0);
+        /// \param nonBlocking    return immediately if an allocation holds the lock
+        /// \return what was released, or skipped = true
+        TrimResult trimEmptyBlocks(uint64_t frame, uint64_t minAgeFrames = 3, std::size_t keepFreeBlocks = 0,
+                                   bool nonBlocking = false);
 
     protected:
         mutable std::mutex _mutex;

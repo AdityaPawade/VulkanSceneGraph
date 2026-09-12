@@ -80,11 +80,28 @@ MemoryBufferPools::PoolStats MemoryBufferPools::deviceMemoryStats() const
 // simply stops being handed out. It is destroyed when the last reference goes,
 // which is what makes this safe to do from the pool without knowing who else
 // holds one.
-MemoryBufferPools::TrimResult MemoryBufferPools::trimEmptyBlocks(uint64_t frame, uint64_t minAgeFrames, std::size_t keepFreeBlocks)
+MemoryBufferPools::TrimResult MemoryBufferPools::trimEmptyBlocks(uint64_t frame, uint64_t minAgeFrames, std::size_t keepFreeBlocks,
+                                                                 bool nonBlocking)
 {
-    std::scoped_lock<std::mutex> lock(_mutex);
-
     TrimResult result;
+
+    // _mutex is the ALLOCATION lock -- reserveMemory holds it across
+    // DeviceMemory::create (vkAllocateMemory) and reserveBuffer across
+    // Buffer::compile -- so a render-thread caller that blocks here pays a
+    // compile thread's driver time out of its own frame. See the header.
+    std::unique_lock<std::mutex> lock(_mutex, std::defer_lock);
+    if (nonBlocking)
+    {
+        if (!lock.try_lock())
+        {
+            result.skipped = true;
+            return result;
+        }
+    }
+    else
+    {
+        lock.lock();
+    }
 
     // Age a block, and say whether it has now been empty long enough to go.
     // Every block is aged on every call, including ones the cushion will
@@ -236,7 +253,9 @@ namespace
 
             const VkDeviceSize size = sizeOf(block);
             c.totalSize += size;
-            if (block->totalReservedSize() == 0)
+            const VkDeviceSize reserved = block->totalReservedSize();
+            c.reservedBytes += reserved;
+            if (reserved == 0)
             {
                 ++c.emptyBlocks;
                 c.emptyBytes += size;
