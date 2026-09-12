@@ -49,6 +49,10 @@ namespace vsg
         size_t totalAvailableSize() const;
         size_t totalReservedSize() const;
 
+        /// Is anything reserved in this buffer? O(1); totalReservedSize() is a
+        /// walk of every live suballocation. See MemorySlots::anyReserved.
+        bool anyReserved() const;
+
         VkMemoryRequirements getMemoryRequirements(uint32_t deviceID) const;
 
         DeviceMemory* getDeviceMemory(uint32_t deviceID) { return _vulkanData[deviceID].deviceMemory; }

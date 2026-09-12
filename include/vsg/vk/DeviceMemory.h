@@ -50,6 +50,11 @@ namespace vsg
         VkDeviceSize maximumAvailableSpace() const;
         size_t totalAvailableSize() const;
         size_t totalReservedSize() const;
+
+        /// Is anything reserved in this block? O(1); totalReservedSize() is a
+        /// walk of every live suballocation. Use this when the answer you want
+        /// is a yes or no -- see MemorySlots::anyReserved.
+        bool anyReserved() const;
         size_t totalMemorySize() const;
 
         Device* getDevice() { return _device; }

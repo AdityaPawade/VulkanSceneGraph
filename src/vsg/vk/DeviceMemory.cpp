@@ -186,6 +186,12 @@ size_t DeviceMemory::totalReservedSize() const
     return _memorySlots.totalReservedSize();
 }
 
+bool DeviceMemory::anyReserved() const
+{
+    std::scoped_lock<std::mutex> lock(_mutex);
+    return _memorySlots.anyReserved();
+}
+
 size_t DeviceMemory::totalMemorySize() const
 {
     return _memorySlots.totalMemorySize();

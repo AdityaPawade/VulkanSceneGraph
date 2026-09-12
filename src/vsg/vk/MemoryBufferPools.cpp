@@ -150,7 +150,17 @@ MemoryBufferPools::TrimResult MemoryBufferPools::trimEmptyBlocks(uint64_t frame,
         for (std::size_t i = 0; i < pool.size(); ++i)
         {
             const Object* block = pool[i].get();
-            const bool isEmpty = pool[i]->totalReservedSize() == 0;
+            // anyReserved(), NOT totalReservedSize() == 0. This line runs
+            // for every block of both pools on the render thread every frame,
+            // and totalReservedSize() sums the whole _reservedMemory map, so
+            // the cost was linear in live suballocations, which is linear in
+            // resident tiles. That is VGIS-544: measured over the same binary
+            // cold and warm (b20warm, 7000+ frames each), the contextUpdate
+            // MEDIAN went 0.76 ms to 3.52 ms once the terrain cache filled,
+            // with the whole distribution shifted rather than a tail -- frames
+            // over 5 ms carry 1% of the total in both. 2.8 ms of a 16.5 ms
+            // budget, spent asking a yes-or-no question the long way.
+            const bool isEmpty = !pool[i]->anyReserved();
 
             // Age every block, empty or not, and before the continue below:
             // this is what clears the clock on a block that got used again.

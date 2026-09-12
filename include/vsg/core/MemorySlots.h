@@ -49,6 +49,16 @@ namespace vsg
         bool full() const { return _availableMemory.empty(); }
         bool empty() const { return totalAvailableSize() == totalMemorySize(); }
 
+        /// Is anything reserved here? O(1), where empty() and
+        /// totalReservedSize() both walk a map.
+        ///
+        /// This exists because a per-frame caller was using
+        /// totalReservedSize() == 0 to ask exactly this, and paying a walk of
+        /// every live suballocation to learn one bit. _reservedMemory is
+        /// emplaced and erased unconditionally, outside every memoryTracking
+        /// guard, so this is exact rather than a debug approximation.
+        bool anyReserved() const { return !_reservedMemory.empty(); }
+
         size_t maximumAvailableSpace() const { return _availableMemory.empty() ? 0 : _availableMemory.rbegin()->first; }
         size_t totalAvailableSize() const;
         size_t totalReservedSize() const;

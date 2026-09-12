@@ -153,6 +153,12 @@ size_t Buffer::totalReservedSize() const
     return _memorySlots.totalReservedSize();
 }
 
+bool Buffer::anyReserved() const
+{
+    std::scoped_lock<std::mutex> lock(_mutex);
+    return _memorySlots.anyReserved();
+}
+
 ref_ptr<Buffer> vsg::createBufferAndMemory(Device* device, VkDeviceSize size, VkBufferUsageFlags usage, VkSharingMode sharingMode, VkMemoryPropertyFlags memoryProperties, void* pNextAllocInfo)
 {
     auto buffer = vsg::Buffer::create(size, usage, sharingMode);
