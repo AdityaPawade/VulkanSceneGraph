@@ -230,6 +230,25 @@ bool vsg::createBufferAndTransferData(Context& context, const BufferInfoList& bu
 
     //transferTask = nullptr;
 
+    // What every entry holds on entry, for the transaction below (VulkanGIS
+    // VGIS-626). Taken before the first loop, because that loop advances the
+    // copy counts.
+    struct Saved
+    {
+        BufferInfo* bufferInfo;
+        ref_ptr<Buffer> buffer;
+        VkDeviceSize offset;
+        VkDeviceSize range;
+        ModifiedCount copied;
+        ref_ptr<Data> data;
+    };
+    std::vector<Saved> saved;
+    saved.reserve(bufferInfoList.size());
+    for (const auto& bufferInfo : bufferInfoList)
+    {
+        saved.push_back(Saved{bufferInfo.get(), bufferInfo->buffer, bufferInfo->offset, bufferInfo->range, bufferInfo->copiedModifiedCounts[deviceID], bufferInfo->data});
+    }
+
     ref_ptr<BufferInfo> deviceBufferInfo;
     size_t numBuffersRequired = 0;
     bool containsMultipleParents = false;
@@ -261,6 +280,39 @@ bool vsg::createBufferAndTransferData(Context& context, const BufferInfoList& bu
         warn("vsg::createBufferAndTransferData(...) does not support multiple parent BufferInfo.");
         return false;
     }
+
+    // THE TRANSACTION, when this call combines the entries into a new buffer (no
+    // entry has a parent yet). An entry may already own a slot of its own (buffer
+    // set, no parent): MemoryBufferPools::reserve() hands one to each BufferInfo
+    // when compileTraversalUseReserve is on, which is the default. The layout
+    // below overwrites the entries' offsets, and nothing else records where those
+    // slots start, so no later release() could find them: every compile of a new
+    // Geometry kept a second copy of its arrays reserved for the life of the
+    // device. VulkanGIS VGIS-626 measured a line rebuilt every frame leaking about
+    // 3 MB/s that way until the device refused an allocation.
+    // DescriptorBuffer::compile fills such slots in place; this path combines,
+    // so it gives them back -- but only once everything has succeeded. On any
+    // failure the entries get back exactly what they held, copy counts included,
+    // so they keep valid buffers and a later compile tries again.
+    if (deviceBufferInfo) saved.clear(); // an existing parent: not a new combination
+    auto restore = [&saved, deviceID]() {
+        for (auto& s : saved)
+        {
+            s.bufferInfo->buffer = s.buffer;
+            s.bufferInfo->offset = s.offset;
+            s.bufferInfo->range = s.range;
+            s.bufferInfo->parent.reset();
+            s.bufferInfo->copiedModifiedCounts[deviceID] = s.copied;
+            s.bufferInfo->data = s.data;
+        }
+    };
+    auto releaseOwnSlots = [&saved]() {
+        for (auto& s : saved)
+        {
+            if (s.buffer) s.buffer->release(s.offset, s.range);
+        }
+        saved.clear();
+    };
 
     VkDeviceSize totalSize = 0;
     VkDeviceSize offset = 0;
@@ -313,77 +365,114 @@ bool vsg::createBufferAndTransferData(Context& context, const BufferInfoList& bu
     if (!deviceBufferInfo)
     {
         VkBufferUsageFlags bufferUsageFlags = VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage;
-        deviceBufferInfo = context.deviceMemoryBufferPools->reserveBuffer(totalSize, alignment, bufferUsageFlags, sharingMode, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        try
+        {
+            deviceBufferInfo = context.deviceMemoryBufferPools->reserveBuffer(totalSize, alignment, bufferUsageFlags, sharingMode, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        }
+        catch (...)
+        {
+            restore();
+            throw;
+        }
     }
 
     if (!deviceBufferInfo)
     {
+        restore();
         debug("vsg::createBufferAndTransferData() Failure to assign Buffer");
         return false;
     }
 
-    debug("deviceBufferInfo->buffer ", deviceBufferInfo->buffer, ", ", deviceBufferInfo->offset, ", ", deviceBufferInfo->range, ")");
-
-    // assign the buffer to the bufferData entries and shift the offsets to offset within the buffer
-    for (const auto& bufferInfo : bufferInfoList)
+    try
     {
-        bufferInfo->buffer = deviceBufferInfo->buffer;
-        bufferInfo->offset += deviceBufferInfo->offset;
-    }
+        debug("deviceBufferInfo->buffer ", deviceBufferInfo->buffer, ", ", deviceBufferInfo->offset, ", ", deviceBufferInfo->range, ")");
 
-    if (transferTask)
-    {
-        vsg::debug("vsg::createBufferAndTransferData(..)");
-
-        for (auto& bufferInfo : bufferInfoList)
+        // assign the buffer to the bufferData entries and shift the offsets to offset within the buffer
+        for (const auto& bufferInfo : bufferInfoList)
         {
-            vsg::debug("    ", bufferInfo, ", ", bufferInfo->data, ", ", bufferInfo->buffer, ", ", bufferInfo->offset);
-            bufferInfo->data->dirty();
+            bufferInfo->buffer = deviceBufferInfo->buffer;
+            bufferInfo->offset += deviceBufferInfo->offset;
+        }
+
+        if (transferTask)
+        {
+            vsg::debug("vsg::createBufferAndTransferData(..)");
+
+            for (auto& bufferInfo : bufferInfoList)
+            {
+                vsg::debug("    ", bufferInfo, ", ", bufferInfo->data, ", ", bufferInfo->buffer, ", ", bufferInfo->offset);
+                bufferInfo->data->dirty();
+                bufferInfo->parent = deviceBufferInfo;
+            }
+
+            transferTask->assign(bufferInfoList);
+
+            releaseOwnSlots();
+            return true;
+        }
+
+        auto stagingBufferInfo = context.stagingMemoryBufferPools->reserveBuffer(totalSize, alignment, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, sharingMode, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        if (!stagingBufferInfo || !stagingBufferInfo->buffer)
+        {
+            restore();
+            debug("vsg::createBufferAndTransferData() Failure to reserve staging Buffer");
+            return false;
+        }
+
+        debug("stagingBufferInfo->buffer ", stagingBufferInfo->buffer.get(), ", ", stagingBufferInfo->offset, ", ", stagingBufferInfo->range, ")");
+
+        ref_ptr<Buffer> stagingBuffer(stagingBufferInfo->buffer);
+        ref_ptr<DeviceMemory> stagingMemory(stagingBuffer->getDeviceMemory(context.deviceID));
+
+        if (!stagingMemory)
+        {
+            restore();
+            return false;
+        }
+
+        void* buffer_data = nullptr;
+        if (stagingMemory->map(stagingBuffer->getMemoryOffset(context.deviceID) + stagingBufferInfo->offset, stagingBufferInfo->range, 0, &buffer_data) != VK_SUCCESS || !buffer_data)
+        {
+            restore();
+            debug("vsg::createBufferAndTransferData() Failure to map staging memory");
+            return false;
+        }
+        char* ptr = reinterpret_cast<char*>(buffer_data);
+
+        debug("    buffer_data ", buffer_data, ", stagingBufferInfo->offset=", stagingBufferInfo->offset, ", ", totalSize);
+
+        for (const auto& bufferInfo : bufferInfoList)
+        {
+            const Data* data = bufferInfo->data;
+            if (data)
+            {
+                std::memcpy(ptr + bufferInfo->offset - deviceBufferInfo->offset, data->dataPointer(), data->dataSize());
+            }
             bufferInfo->parent = deviceBufferInfo;
         }
 
-        transferTask->assign(bufferInfoList);
+        stagingMemory->unmap();
 
-        return true;
-    }
+        context.copy(stagingBufferInfo, deviceBufferInfo);
 
-    auto stagingBufferInfo = context.stagingMemoryBufferPools->reserveBuffer(totalSize, alignment, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, sharingMode, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-    debug("stagingBufferInfo->buffer ", stagingBufferInfo->buffer.get(), ", ", stagingBufferInfo->offset, ", ", stagingBufferInfo->range, ")");
-
-    ref_ptr<Buffer> stagingBuffer(stagingBufferInfo->buffer);
-    ref_ptr<DeviceMemory> stagingMemory(stagingBuffer->getDeviceMemory(context.deviceID));
-
-    if (!stagingMemory)
-    {
-        return false;
-    }
-
-    void* buffer_data;
-    stagingMemory->map(stagingBuffer->getMemoryOffset(context.deviceID) + stagingBufferInfo->offset, stagingBufferInfo->range, 0, &buffer_data);
-    char* ptr = reinterpret_cast<char*>(buffer_data);
-
-    debug("    buffer_data ", buffer_data, ", stagingBufferInfo->offset=", stagingBufferInfo->offset, ", ", totalSize);
-
-    for (const auto& bufferInfo : bufferInfoList)
-    {
-        const Data* data = bufferInfo->data;
-        if (data)
+        // Only now, with the copy queued, may data marked unref-after-transfer be
+        // let go: a rollback before this point must be able to put it back.
+        for (const auto& bufferInfo : bufferInfoList)
         {
-            std::memcpy(ptr + bufferInfo->offset - deviceBufferInfo->offset, data->dataPointer(), data->dataSize());
-            if (data->properties.dataVariance == STATIC_DATA_UNREF_AFTER_TRANSFER)
+            if (bufferInfo->data && bufferInfo->data->properties.dataVariance == STATIC_DATA_UNREF_AFTER_TRANSFER)
             {
                 bufferInfo->data.reset();
             }
         }
-        bufferInfo->parent = deviceBufferInfo;
+
+        releaseOwnSlots();
+        return true;
     }
-
-    stagingMemory->unmap();
-
-    context.copy(stagingBufferInfo, deviceBufferInfo);
-
-    return true;
+    catch (...)
+    {
+        restore();
+        throw;
+    }
 }
 
 VkDeviceSize BufferInfo::computeDataSize() const
