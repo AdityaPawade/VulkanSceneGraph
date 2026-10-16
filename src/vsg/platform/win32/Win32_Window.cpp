@@ -652,7 +652,11 @@ bool Win32_Window::handleWin32Messages(UINT msg, WPARAM wParam, LPARAM lParam)
     }
     break;
     case WM_MOUSEWHEEL: {
-        bufferedEvents.emplace_back(vsg::ScrollWheelEvent::create(this, event_time, GET_WHEEL_DELTA_WPARAM(wParam) < 0 ? vec3(0.0f, -1.0f, 0.0f) : vec3(0.0f, 1.0f, 0.0f)));
+        // In notches: WHEEL_DELTA (120) is one. A touchpad or a fine-step wheel sends
+        // fractions of one, many a second; rounding each to a whole notch scrolled the
+        // MPDS page about ten times too far (VGIS-997). A mouse notch is still exactly 1.
+        const float notches = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)) / static_cast<float>(WHEEL_DELTA);
+        bufferedEvents.emplace_back(vsg::ScrollWheelEvent::create(this, event_time, vec3(0.0f, notches, 0.0f)));
         return true;
     }
     case WM_MOVE: {
